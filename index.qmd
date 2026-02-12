@@ -310,6 +310,8 @@ ggplotly(author_us_map_int, tooltip = "text") %>%
 
 ## Texas author distribution
 
+### Table of authors by county
+
 ```{r}
 Tx <- maps::map(
   database = "county",
@@ -392,6 +394,8 @@ datatable(
 
 ```
 
+### Table of authors by county and by year
+
 ```{r}
 county_year_counts <- authors_with_county %>%
   st_drop_geometry() %>%
@@ -410,19 +414,6 @@ county_year_counts_dt <- county_year_counts %>%
     Authors = n_authors
   )
 
-datatable(
-  county_year_counts_dt,
-  rownames = FALSE,
-  filter = "top",
-  extensions = "Buttons",
-  options = list(
-    pageLength = 20,
-    autoWidth = TRUE,
-    dom = "Bfrtip",
-    buttons = c("copy", "csv", "excel"),
-    order = list(list(1, "desc"), list(2, "desc"))  # Year desc, Authors desc
-  )
-)
 
 ```
 
@@ -446,6 +437,63 @@ datatable(county_year_wide,
             buttons = c("copy", "csv", "excel")
           ))
 ```
+
+```{r}
+
+tx_counties_df <- map_data("county") %>%
+  filter(region == "texas") %>%
+  mutate(
+    county = str_to_title(subregion)
+  )
+
+tx_map_year <- tx_counties_df %>%
+  left_join(county_year_counts, by = "county") %>% 
+  filter(!is.na(year))  
+
+tx_map_year2 <- tx_map_year %>%
+  mutate(year = as.character(year))
+
+# 2) Crea meeting_sites con year exactamente igual (y numéricos lon/lat)
+meeting_sites <- tibble::tibble(
+  year = c("2022", "2023", "2024", "2025"),
+  city = c("Horseshoe Bay", "Houston", "Houston", "Denton"),
+  lon  = c(-98.375000, -95.358421, -95.358421, -97.133611),
+  lat  = c( 30.539722,  29.749908,  29.749908,  33.211944)
+) %>%
+  mutate(
+    year = factor(year, levels = sort(unique(tx_map_year2$year))),
+    lon = as.numeric(lon),
+    lat = as.numeric(lat)
+  )  
+
+tx_author_map <- ggplot(tx_map_year2) +
+  geom_polygon(data= Tx, aes(long, lat, group = group),
+               fill = "grey90", color = "white", linewidth = 0.2) +
+  geom_polygon(aes(long, lat, group = group, fill = n_authors),
+               color = "white", linewidth = 0.2) +
+  coord_fixed(1.3) +
+  facet_grid(~year) +
+  scale_fill_viridis_c(na.value = "grey85", name = "Number of\nunique authors") +
+
+ # geom_point(
+#    data = meeting_sites,
+#    aes(x = lon, y = lat),
+#    inherit.aes = FALSE,
+#    shape = 8, size = 2, stroke = 1.3,
+#    color = "red"
+#  ) +
+
+  theme_void(base_size = 8, base_family = "tctws") +
+  theme(
+    strip.text = element_text(face = "bold"),
+    legend.background = element_rect(fill = alpha("white", 0.85), colour = NA),
+    legend.key = element_rect(fill = "white", colour = NA)
+  )
+
+tx_author_map
+```
+
+### Table of authors by city and year
 
 ```{r}
 county_year_city <- authors_with_county %>%
@@ -474,10 +522,12 @@ datatable(county_year_city_wide,
 ```
 
 ```{r}
-#| fig-width: 8
-#| fig-height: 10
+#| fig-width: 12
+#| fig-height: 6
 #| fig-align: "center"
 #| fig-cap: "Number of unique authors by city and year (2022–2025)."
+
+
 
 top_city_by_year <- county_year_city %>%
   group_by(year) %>%
@@ -500,7 +550,7 @@ topcity_author <- ggplot(top_city_by_year,
   ) +
   geom_text(
     aes(label = n_authors),
-    size = 4.5,
+    size = 2.5,
     family = "tctws",
     color = "white",
     fontface = "bold"
@@ -511,7 +561,7 @@ topcity_author <- ggplot(top_city_by_year,
     x = "Number of unique authors",
     y = "City"
   ) +
-  theme_minimal(base_size = 14, base_family = "tctws") +
+  theme_minimal(base_size = 10, base_family = "tctws") +
   theme(
     panel.grid.major.y = element_blank(),
     panel.grid.minor = element_blank(),
@@ -526,6 +576,10 @@ topcity_author
 # Institutional collaboration network
 
 ```{r}
+#| fig-width: 9
+#| fig-height: 7
+#| fig-align: "center"
+
 authors_net <- authors %>%
   filter(!is.na(institution), institution != "") %>%
   mutate(
@@ -595,7 +649,7 @@ g0 <- graph_from_data_frame(edges, directed = FALSE)
 
 node_strength <- igraph::strength(g0, weights = igraph::E(g0)$n_talks)
 
-top_inst <- names(sort(node_strength, decreasing = TRUE))[1:30]  # ajusta 20–40
+top_inst <- names(sort(node_strength, decreasing = TRUE))[1:30]  
 
 g <- induced_subgraph(g0, vids = top_inst)
 
@@ -617,7 +671,7 @@ net_authors <- ggraph(g_tbl, layout = "fr") +
   geom_node_text(
     aes(label = name),
     repel = TRUE,
-    size = 4,
+    size = 2,
     fontface= "bold",
     family = "tctws"
   ) +
@@ -627,7 +681,7 @@ net_authors <- ggraph(g_tbl, layout = "fr") +
     title = "Top 30 Institutional collaboration network (TCTWS abstracts 2022–2025)",
     #subtitle = "Edges weighted by number of shared talks (n_talks)"
   ) +
-  theme_void(base_size = 13, base_family = "tctws") +
+  theme_void(base_size = 7, base_family = "tctws") +
   theme(
     plot.title = element_text(face = "bold"),
     legend.position = "bottom"
@@ -635,6 +689,8 @@ net_authors <- ggraph(g_tbl, layout = "fr") +
 
 net_authors
 ```
+
+### Total author shared talks
 
 ```{r}
 edges_tbl <- as_data_frame(g0, what = "edges") %>%
@@ -764,8 +820,8 @@ datatable(species_year_wide,
 ```
 
 ```{r}
-#| fig-width: 15
-#| fig-height: 8
+#| fig-width: 9.5
+#| fig-height: 6
 #| fig-align: "center"
 #| fig-cap: "Top 8 species sicentific names mentioned in an abstract by year"
 species_top_year <- species_year_counts %>%
@@ -803,13 +859,13 @@ Species_plot <- ggplot(species_top_year, aes(x = cmon_ordered, y = n_abstracts))
   ) +
   
 
-  geom_point(aes(color = sps_type), size = 4, alpha = 0.9) +
+  geom_point(aes(color = sps_type), size = 6, alpha = 0.9) +
   
    geom_text(
     aes(label = n_abstracts),
     family = "tctws",
     size = 2,
-    hjust = -0.15,
+    hjust = -0.20,
     color = "#2B2B2B"
   ) +
   
@@ -831,7 +887,7 @@ Species_plot <- ggplot(species_top_year, aes(x = cmon_ordered, y = n_abstracts))
     y = "Number of abstracts mentioning species",
     color = "Type"
   ) +
-  theme_bw(base_family = "tctws", base_size = 4) +
+  theme_bw(base_family = "tctws", base_size = 6) +
   theme(
     strip.background = element_rect(fill = "transparent", colour = NA),
     panel.grid.minor = element_blank(),
@@ -840,8 +896,8 @@ Species_plot <- ggplot(species_top_year, aes(x = cmon_ordered, y = n_abstracts))
     legend.position = "bottom",
     legend.background = element_rect(fill = "white", color = NA),
     legend.key = element_rect(fill = "white", color = NA),
-    legend.text = element_text(size = 3),
-    axis.text.y = element_text(size = 3),
+    legend.text = element_text(size = 6),
+    axis.text.y = element_text(size = 6),
     plot.margin = margin(10, 25, 10, 10) 
   )
 
