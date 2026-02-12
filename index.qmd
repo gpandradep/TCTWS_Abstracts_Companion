@@ -1,0 +1,849 @@
+---
+title: "TCTWS Abstracts (2022–2025): Interactive Companion"
+author: 
+ - name: "Gabriel P. Andrade-Ponce"
+   email: Gabriel.Andrade@sfasu.edu
+   affiliation: "Arthur Temple College of Forestry & Agriculture, Stephen F. Austin State University"
+ - name: "Jessica L. Glasscock"
+   email: Jessica.Glasscock@sfasu.edu
+   affiliation: "Arthur Temple College of Forestry & Agriculture, Stephen F. Austin State University"   
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-location: left
+    number-sections: false
+    code-fold: true
+    code-summary: "Show code"
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# Analysis of research trends in the Texas Chapter of The Wildlife Society using data mining of annual meeting programs
+
+The Texas Chapter of The Wildlife Society (TCTWS), established in 1965, has long served as a cornerstone for wildlife science and management in the state. The Chapter promotes the profession, disseminates scientific information, and advocates for the integration of sound biological data into wildlife policy and decision-making. For decades, the annual meeting has been a central venue for sharing research, exchanging ideas, and fostering collaboration among scientists, managers, and institutions across Texas. Examining the evolution of the knowledge presented at these meetings provides valuable context for identifying emerging topics, shifting priorities, and long-term trends in wildlife conservation across the state. In this study, we apply text-analysis and data-mining tools to the abstracts submitted to recent TCTWS annual meetings. We characterize historical research trends in terms of focal taxa, ecological and management topics, and analytical approaches. Additionally, we quantify and describe the collaborative network among academic, governmental, and non-governmental institutions participating in the meetings. This work aims to provide an updated, data-driven perspective on how research themes and institutional collaborations have evolved within the TCTWS community. By documenting these patterns, we highlight new directions and persistent priorities as the Chapter continues to advance wildlife science and conservation in Texas.
+
+## R packages
+
+```{r}
+library(tidyverse)
+library(showtext)
+library(sysfonts)
+library(tidytext)
+library(ggtext)
+library(ggrepel)
+library(readxl)
+library(treemapify)
+library(rphylopic)
+library(DT)
+library(kableExtra)
+library(plotly)
+library(rnaturalearth)
+library(sf)
+library(igraph)
+library(ggraph)
+library(tidygraph)
+```
+
+```{r}
+'%notin%' <- Negate("%in%")
+font_add_google("Montserrat", "tctws")
+showtext_auto()
+showtext_opts(dpi = 300)
+```
+
+# Number of abstracts
+
+```{r}
+abstract_df  <- read_csv("Data/Clean/22to25_years_abstracts.csv") %>% 
+  # get only abstracts
+  select(abstract, year) %>% 
+  mutate(ID= seq(1:length(.$abstract)))
+
+nabstracts <- abstract_df %>% 
+  count(year) %>% 
+  mutate(year= as.factor(year),
+         conf= c("Horseshoe Bay", "Houston", "Houston", "Denton"))
+
+nabstracts %>%
+  arrange(year) %>%
+  rename(
+    Year = year,
+    `Number of Abstracts` = n,
+    Conference = conf
+  ) %>%
+  kbl(
+    align = c("c", "c", "l"),
+    caption = "Number of abstracts presented at TCTWS annual meetings (2022–2025)"
+  ) %>%
+  kable_classic(full_width = FALSE, html_font = "Helvetica") %>%
+  column_spec(2, bold = TRUE) %>%
+  row_spec(0, bold = TRUE)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 6
+#| fig-align: "center"
+#| fig-cap: "Number of abstracts presented at TCTWS annual meetings (2022–2025)."
+tctws_maroon <- "#693332"
+tctws_text   <- "#1F1F1F"
+tctws_grid   <- "#E6E6E6"
+
+nabstractplot <- ggplot(nabstracts, aes(x = year, y = n)) +
+  geom_segment(aes(y = 0, yend = n ), col= tctws_maroon, size= 3) +
+  geom_point( size = 8, color = tctws_maroon) +
+  geom_text( aes(label = n),  vjust = -1, family = "tctws",
+    size = 6, color = tctws_text
+  ) +
+  geom_text(aes(label = conf), hjust= 1.2, family="tctws",
+            angle= 90, vjust= 1.2, size= 4)+
+  scale_y_continuous( expand = expansion(mult = c(0, 0.12))) +
+  labs( x = "Year", y = "Number of abstracts") +
+  theme_minimal(base_family = "tctws", base_size = 15) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = tctws_grid, linewidth = 0.4),
+    axis.title = element_text(face = "bold"),
+    axis.text  = element_text(color = tctws_text),
+    plot.margin = margin(10, 12, 10, 12)
+  )
+
+nabstractplot
+```
+
+# Authors geographical distribution
+
+```{r}
+authors <- read.csv("Data/Clean/22to25_years_authors_cleanedchapter.csv")
+```
+
+## Worldwide author distribution
+
+```{r}
+country_counts <- authors %>%
+  filter(!is.na(country_std)) %>%
+  distinct(author, country_std) %>%
+  count(country_std, name = "n_authors")
+
+country_counts2 <- country_counts %>%
+  arrange(desc(n_authors)) %>%
+  mutate(
+    perc = round(n_authors / sum(n_authors) * 100, 1)
+  )
+
+country_counts2 %>%
+  rename(
+    Country = country_std,
+    `Number of Authors` = n_authors,
+    `Percent (%)` = perc
+  ) %>%
+  kbl(align = c("l", "c", "c"),
+      caption = "Author affiliation by country (unique authors)") %>%
+  kable_classic(full_width = FALSE) %>%
+  column_spec(2, bold = TRUE) %>%
+  row_spec(0, bold = TRUE)
+```
+
+```{r}
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+world_map <- world %>%
+  left_join(country_counts, by = c("name" = "country_std")) %>%
+  mutate(
+    n_authors = replace_na(n_authors, 0L),
+    tooltip = paste0(
+      "<b>", name, "</b>",
+      "<br>Authors: ", n_authors
+    )
+  )
+
+
+author_world_int <- ggplot(world_map) +
+  geom_sf(aes(fill = as.factor(n_authors), text = tooltip),
+          color = "white", linewidth = 0.2, alpha = 0.9) +
+  scale_fill_manual(
+    values = c(
+      "1096" = "#E15759", 
+      "15"   = "#F28E2B",
+      "4"    = "#76B7B2",
+      "1"    = "#4E79A7"
+    ),
+    na.value = "grey",
+    name = "Number of\nauthors"
+  )+
+  coord_sf(ylim = c(-60, 80)) +
+  theme_void(base_size = 15, base_family = "tctws") +
+  labs(title = "Worldwide geographic distribution of authors") 
+  theme(legend.position = "none")
+
+ggplotly(author_world_int, tooltip = "text") %>%
+  layout(margin = list(l = 0, r = 0, t = 60, b = 0))
+```
+
+## US author distribution
+
+```{r}
+valid_usps <- c(state.abb, "DC")
+
+authors_us <- authors %>%
+  filter(country_std == "United States of America") %>% 
+  mutate(state_clean = str_squish(state),
+         
+           state_clean = case_when(
+           str_to_lower(state_clean) == "texas" ~ "TX",
+           str_to_lower(state_clean) == "arkansas" ~ "AR",
+           state_clean %in% c("D.C", "D.C.", "Washington, D.C.", "Washington DC", "DC") ~ "DC",
+           TRUE ~ state_clean
+         ),
+         
+         state_clean = str_to_upper(state_clean),
+         
+           state_usps = if_else(state_clean %in% valid_usps, state_clean, NA_character_)
+  ) %>%
+  filter(!is.na(state_usps))
+
+state_counts <- authors_us %>%
+  distinct(author, state_usps) %>%
+  count(state_usps, name = "n_authors")
+
+
+state_counts2 <- state_counts %>%
+  arrange(desc(n_authors)) %>%
+  mutate(
+    perc = round(n_authors / sum(n_authors) * 100, 1)
+  )
+
+state_counts2 %>%
+  rename(
+    State = state_usps,
+    `Number of Authors` = n_authors,
+    `Percent (%)` = perc
+  ) %>%
+  kbl(align = c("l", "c", "c"),
+      caption = "Author affiliation by State (unique authors)") %>%
+  kable_classic(full_width = FALSE) %>%
+  column_spec(2, bold = TRUE) %>%
+  row_spec(0, bold = TRUE)
+```
+
+```{r}
+us_states <- map_data("state")
+
+
+state_ref <- tibble::tibble(
+  state_usps = state.abb,
+  state_name = tolower(state.name)
+)
+
+state_counts2 <- state_counts %>%
+  filter(state_usps != "TX") %>%
+  left_join(state_ref, by = "state_usps")
+
+state_countstx <- state_counts %>%
+  filter(state_usps == "TX") %>% 
+  left_join(state_ref, by = "state_usps")
+
+us_map <- us_states %>%
+  left_join(state_counts2, by = c("region" = "state_name"))
+
+us_map_tx <- us_states %>%
+  filter(region == "texas") %>%
+  left_join(state_countstx, by = c("region" = "state_name"))
+
+
+state_labels <- tibble(
+  state_usps = state.abb,
+  state_name = tolower(state.name),
+  lon = state.center$x,
+  lat = state.center$y
+) %>% 
+  left_join(state_counts, by = "state_usps")
+
+
+state_counts_join <- state_counts %>%
+  left_join(state_ref, by = "state_usps") %>%
+  mutate(
+    n_authors = replace_na(n_authors, 0L),
+    tooltip = paste0(
+      "<b>", str_to_title(state_name), "</b>",
+      " (", state_usps, ")",
+      "<br>Authors: ", n_authors
+    )
+  )
+
+# Separar TX para mantener tu estilo
+state_counts2 <- state_counts_join %>% filter(state_usps != "TX")
+state_countstx <- state_counts_join %>% filter(state_usps == "TX")
+
+us_map <- us_states %>%
+  left_join(state_counts2, by = c("region" = "state_name"))
+
+us_map_tx <- us_states %>%
+  filter(region == "texas") %>%
+  left_join(state_countstx, by = c("region" = "state_name"))
+
+author_us_map_int <- ggplot(us_map) +
+  geom_polygon(
+    aes(long, lat, group = group, fill = n_authors, text = tooltip),
+    color = "white", linewidth = 0.2
+  ) +
+  coord_fixed(1.3) +
+  scale_fill_viridis_c(na.value = "grey85") +
+  geom_polygon(
+    data = us_map_tx,
+    aes(long, lat, group = group,
+        text = paste0("<b>Texas</b> (TX)<br>Authors: ", n_authors)),
+    color = "white", linewidth = 0.2, fill = "#E15759"
+  ) +
+  labs(title = "Authors by state in the United States") +
+  theme_void(base_size = 13, base_family = "tctws") +
+  theme(legend.position = "none")
+
+ggplotly(author_us_map_int, tooltip = "text") %>%
+  style(hoveron = "fills") %>% 
+  layout(margin = list(l = 0, r = 0, t = 60, b = 0))
+```
+
+## Texas author distribution
+
+```{r}
+Tx <- maps::map(
+  database = "county",
+  regions  = "texas",
+  fill     = TRUE,
+  plot     = FALSE
+)
+
+tx_counties_sf <- st_as_sf(Tx) %>% 
+  st_transform(., 4326) %>%
+  st_make_valid()
+
+
+# Texas cities
+
+TX_cities <- read.delim("Data/2025_Gaz_cousubs_national.txt", header = TRUE, sep = "|") %>% 
+  mutate(
+    city_clean =  tolower(trimws(NAME)),
+    city_clean = str_remove(city_clean, " ccd")
+  ) %>% 
+  filter(USPS == "TX") %>% 
+  select(NAME, Lat= INTPTLAT,    Lon= INTPTLONG,   city_clean)
+
+authors_tx <- authors %>%
+  filter(country == "USA", state == "TX") %>%
+  mutate(city_clean = tolower(trimws(city)))
+
+authors_tx_pts <- authors_tx %>%
+  left_join(TX_cities, by = "city_clean") %>%
+  filter(!is.na(Lat), !is.na(Lon))
+
+
+
+sf_use_s2(FALSE)
+
+authors_sf <- st_as_sf(authors_tx_pts, coords = c("Lon", "Lat"), crs = 4326)
+
+tx_counties_sf <- st_make_valid(tx_counties_sf)
+
+authors_with_county <- st_join(authors_sf, tx_counties_sf, join = st_within)
+
+sf_use_s2(TRUE)
+
+authors_with_county <- st_join(authors_sf, tx_counties_sf, join = st_within) %>% 
+  mutate(county= str_to_title(sub("^texas,", "", ID)))
+
+
+county_counts <- authors_with_county %>%
+  st_drop_geometry() %>%
+  distinct(author, county) %>%
+  count(county, name = "n_authors")
+
+county_counts_dt <- county_counts %>%
+  arrange(desc(n_authors), county) %>%
+  mutate(
+    perc = round(n_authors / sum(n_authors) * 100, 1),
+    cum_perc = round(cumsum(perc), 1)
+  ) %>%
+  rename(
+    County = county,
+    `Authors` = n_authors,
+    `Percent (%)` = perc,
+    `Cumulative (%)` = cum_perc
+  )
+
+datatable(
+  county_counts_dt,
+  rownames = FALSE,
+  filter = "top",
+  extensions = c("Buttons"),
+  options = list(
+    pageLength = 15,
+    autoWidth = TRUE,
+    dom = "Bfrtip",
+    buttons = c("copy", "csv", "excel"),
+    order = list(list(1, "desc")) # columna Authors (0=County,1=Authors)
+  )
+)
+
+
+```
+
+```{r}
+county_year_counts <- authors_with_county %>%
+  st_drop_geometry() %>%
+  distinct(author, county, year) %>%
+  count(county, year, name = "n_authors") %>% 
+  filter(!is.na(year))
+
+county_year_counts_dt <- county_year_counts %>%
+  arrange(desc(year), desc(n_authors)) %>%
+  mutate(
+    year = as.integer(as.character(year))
+  ) %>%
+  rename(
+    County = county,
+    Year = year,
+    Authors = n_authors
+  )
+
+datatable(
+  county_year_counts_dt,
+  rownames = FALSE,
+  filter = "top",
+  extensions = "Buttons",
+  options = list(
+    pageLength = 20,
+    autoWidth = TRUE,
+    dom = "Bfrtip",
+    buttons = c("copy", "csv", "excel"),
+    order = list(list(1, "desc"), list(2, "desc"))  # Year desc, Authors desc
+  )
+)
+
+```
+
+```{r}
+county_year_wide <- county_year_counts %>%
+  mutate(year = as.character(year)) %>%
+  pivot_wider(
+    names_from = year,
+    values_from = n_authors,
+    values_fill = 0
+  ) %>%
+  arrange(desc(`2025`)) %>% 
+drop_na(county)
+
+datatable(county_year_wide,
+          rownames = FALSE,
+          extensions = "Buttons",
+          options = list(
+            pageLength = 20,
+            dom = "Bfrtip",
+            buttons = c("copy", "csv", "excel")
+          ))
+```
+
+```{r}
+county_year_city <- authors_with_county %>%
+  st_drop_geometry() %>%
+  distinct(author, city, year) %>%
+  count(city, year, name = "n_authors") %>% 
+  filter(!is.na(year)) 
+
+county_year_city_wide <- county_year_city %>%
+  pivot_wider(
+    names_from = year,
+    values_from = n_authors,
+    values_fill = 0
+  ) %>%
+  arrange(desc(`2025`))
+
+datatable(county_year_city_wide,
+          rownames = FALSE,
+          extensions = "Buttons",
+          options = list(
+            pageLength = 20,
+            dom = "Bfrtip",
+            buttons = c("copy", "csv", "excel")
+          ))
+
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 10
+#| fig-align: "center"
+#| fig-cap: "Number of unique authors by city and year (2022–2025)."
+
+top_city_by_year <- county_year_city %>%
+  group_by(year) %>%
+  slice_max(n_authors, n = 5, with_ties = FALSE) %>%
+  ungroup()
+
+topcity_author <- ggplot(top_city_by_year,
+       aes(
+         x = n_authors,
+         y = reorder(city, n_authors)
+       )) +
+  geom_linerange(
+    aes(xmin = 0, xmax = n_authors),
+    linewidth = 2.5,
+    color = tctws_maroon
+  ) +
+  geom_point(
+    size = 9,
+    color = tctws_maroon
+  ) +
+  geom_text(
+    aes(label = n_authors),
+    size = 4.5,
+    family = "tctws",
+    color = "white",
+    fontface = "bold"
+  ) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.1))) +
+  facet_grid(. ~ year, scales = "free_y") +
+  labs(
+    x = "Number of unique authors",
+    y = "City"
+  ) +
+  theme_minimal(base_size = 14, base_family = "tctws") +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title = element_text(face = "bold"),
+    legend.position = "none",
+    plot.margin = margin(10, 12, 10, 12)
+  )
+
+topcity_author
+```
+
+# Institutional collaboration network
+
+```{r}
+authors_net <- authors %>%
+  filter(!is.na(institution), institution != "") %>%
+  mutate(
+    institution = str_squish(institution),
+    talk_uid = paste0(year, "_",talk_id)
+  )
+
+
+inst_by_talk <- authors_net %>%
+  distinct(talk_uid , institution) %>% 
+  filter(talk_uid != "2022_NA") %>% 
+  filter(talk_uid != "NA_1") %>% 
+  mutate(institution_Ac= case_when(institution == "Texas A&M-Kingsville"~ "TAMUK",
+                                   institution == "Texas Tech University"~ "TTU",
+                                   institution == "Sul Ross State University"~ "SRSU",
+                                   institution == "Stephen F. Austin State University"~ "SFASU",
+                                   institution == "Texas State University"~ "TXST",
+                                   institution == "Texas A&M-College Station"~ "TAMU",
+                                   institution == "UT San Antonio"~ "UTSA",
+                                   institution == "Tarleton State University"~ "TSU",
+                                   institution == "UT Rio Grande Valley"~ "UTRGV",
+                                   institution == "Texas A&M-AgriLife"~ "AgriLife",
+                                   institution == "U.S. Fish and Wildlife Service"~ "USFWS",
+                                   institution == "Texas Parks & Wildlife Department"~ "TPWD",
+                                   institution == "Idaho Department of Fish and Game"~ "Idaho DFG",
+                                   institution == "Texas Department of Transportation"~ "TXDOT",
+                                   institution == "U.S. Department of Agriculture"~ "USDA",
+                                   institution == "Texas A&M-International University"~ "TAMIU",
+                                   institution == "New Mexico Department of Game and Fish"~ "New Mexico DGF",
+                                   institution == "U.S. Forest Service"~ "USFS",
+                                   institution == "U.S. Geological Survey"~ "USGS",
+                                   
+                                   TRUE ~ institution
+                                   )    )
+
+talk_sizes <- inst_by_talk %>%
+  count(talk_uid, name = "n_inst")
+
+
+edges_raw <- inst_by_talk %>%
+  left_join(talk_sizes, by = "talk_uid") %>%
+  filter(n_inst >= 2) %>%
+  group_by(talk_uid) %>%
+  summarise(
+    pairs = list(t(combn(institution_Ac, 2))),
+    .groups = "drop"
+  ) %>%
+  unnest(pairs) %>%
+  as_tibble()
+  
+
+  
+
+edges_raw$inst1 <- edges_raw$pairs[,1]
+edges_raw$inst2 <- edges_raw$pairs[,2]
+
+
+
+edges <- edges_raw %>%   #
+  count(inst1, inst2, name = "n_talks") %>%
+  arrange(desc(n_talks))
+
+edges_f <- edges %>% filter(n_talks >= 4)
+
+
+g0 <- graph_from_data_frame(edges, directed = FALSE)
+
+node_strength <- igraph::strength(g0, weights = igraph::E(g0)$n_talks)
+
+top_inst <- names(sort(node_strength, decreasing = TRUE))[1:30]  # ajusta 20–40
+
+g <- induced_subgraph(g0, vids = top_inst)
+
+
+g_tbl <- as_tbl_graph(g) %>%
+  activate(edges) %>%
+  mutate(n_talks = as.numeric(n_talks)) %>%
+  activate(nodes) %>%
+  mutate(
+    degree = centrality_degree(),
+    strength = centrality_authority(weights = n_talks)
+  )
+
+set.seed(1)
+
+net_authors <- ggraph(g_tbl, layout = "fr") +
+  geom_edge_link(aes(width = n_talks), alpha = 0.45, color = "grey50") +
+  geom_node_point(aes(size = strength), color = "#4E79A7", alpha = 0.9) +
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    size = 4,
+    fontface= "bold",
+    family = "tctws"
+  ) +
+  scale_edge_width(range = c(0.2, 2.5), name = "Shared talks") +
+  scale_size(range = c(3, 12), name = "Connectivity") +
+  labs(
+    title = "Top 30 Institutional collaboration network (TCTWS abstracts 2022–2025)",
+    #subtitle = "Edges weighted by number of shared talks (n_talks)"
+  ) +
+  theme_void(base_size = 13, base_family = "tctws") +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "bottom"
+  )
+
+net_authors
+```
+
+```{r}
+edges_tbl <- as_data_frame(g0, what = "edges") %>%
+  as_tibble() %>%
+  rename(
+    inst1 = from,
+    inst2 = to,
+    shared_talks = n_talks
+  ) %>%
+  arrange(desc(shared_talks), inst1, inst2)
+
+inst_key <- inst_by_talk %>%
+  distinct(institution_Ac, institution) %>%
+  group_by(institution_Ac) %>%
+  slice_max(n = 1, order_by = 1) %>%  # por si hay duplicados raros
+  ungroup()
+
+edges_tbl <- edges_tbl %>%
+  left_join(inst_key, by = c("inst1" = "institution_Ac")) %>%
+  rename(inst1_full = institution) %>%
+  left_join(inst_key, by = c("inst2" = "institution_Ac")) %>%
+  rename(inst2_full = institution) %>%
+  mutate(
+    inst1_full = if_else(is.na(inst1_full), inst1, inst1_full),
+    inst2_full = if_else(is.na(inst2_full), inst2, inst2_full)
+  ) %>%
+  select(inst1, inst1_full, inst2, inst2_full, shared_talks) %>%
+  rename(
+    Inst1 = inst1,
+    `Institution 1` = inst1_full,
+    Inst2 = inst2,
+    `Institution 2` = inst2_full,
+    `Shared talks` = shared_talks
+  )
+
+
+datatable(
+  edges_tbl,
+  rownames = FALSE,
+  filter = "top",
+  extensions = "Buttons",
+  options = list(
+    pageLength = 20,
+    dom = "Bfrtip",
+    buttons = c("copy", "csv", "excel"),
+    order = list(list(4, "desc"))
+  )
+)
+```
+
+# Species focus research trend
+
+Load a list of species from Texas
+
+```{r}
+TX_species <- read_excel("Data/TX_species.xlsx") %>% 
+  select(`Species Group (Broad)`, `Common Name`, `Scientific Name`) %>%
+  filter(`Species Group (Broad)` %in% c("Vertebrates", "Mussels, Snails, & Other Molluscs" , "Crayfish, Shrimp, & Other Crustaceans", "Insects - Bees", "Insects - Beetles", "Insects - Butterflies and Moths","Insects - Caddisflies, Mayflies, and Stoneflies", "Insects - Damselflies and Dragonflies","Insects - Flies", "Insects - Other" , "Other Invertebrates - Terrestrial/Freshwater"))
+```
+
+Detect mention of species based on the scientific name
+
+```{r}
+# Species presence --------------------------------------------------------
+
+abstract_df2 <- abstract_df %>%
+  mutate(
+    abstract_clean = abstract %>%
+      str_to_lower() %>%
+      str_replace_all("[^a-z\\s]", " ") %>%
+      str_squish()
+  )
+
+TX_species2 <- TX_species %>%
+  mutate(
+    common_clean = `Common Name` %>%
+      str_to_lower() %>%
+      str_replace_all("[^a-z\\s]", " ") %>%
+      str_squish(),
+    
+    sci_clean = `Scientific Name` %>%
+      str_to_lower() %>%
+      str_replace_all("[^a-z\\s]", " ") %>%
+      str_squish()
+  )
+
+
+species_hits <- abstract_df2 %>%
+  tidyr::crossing(TX_species2) %>%
+  mutate(
+    detected = str_detect(
+      abstract_clean,
+      regex(
+        paste0("\\b", sci_clean, "\\b"),
+        ignore_case = TRUE
+      )
+    )
+  ) %>%
+  group_by(ID, year, `Scientific Name`) %>%
+  summarise(detected = any(detected), .groups = "drop")
+
+species_year_counts <- species_hits %>%
+  filter(detected) %>%
+  group_by(year, `Scientific Name`) %>%
+  summarise(
+    n_abstracts = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(year, desc(n_abstracts))
+
+species_year_wide <- pivot_wider(species_year_counts, 
+                                 names_from = year,
+    values_from = n_abstracts,
+    values_fill = 0
+  ) %>%
+  arrange(desc(`2025`))
+
+datatable(species_year_wide,
+          rownames = FALSE,
+          extensions = "Buttons",
+          options = list(
+            pageLength = 20,
+            dom = "Bfrtip",
+            buttons = c("copy", "csv", "excel")
+          ))
+
+```
+
+```{r}
+#| fig-width: 15
+#| fig-height: 8
+#| fig-align: "center"
+#| fig-cap: "Top 8 species sicentific names mentioned in an abstract by year"
+species_top_year <- species_year_counts %>%
+  group_by(year) %>%
+  slice_max(n_abstracts, n = 8, with_ties = FALSE) %>%
+  ungroup() %>% 
+  select(year, `Scientific Name`, n_abstracts) %>% 
+  left_join(TX_species %>% select(`Scientific Name`, `Common Name`), by = "Scientific Name") %>% 
+  mutate(
+    sps_type= case_when(`Scientific Name` %in% c("Odocoileus virginianus",
+                                                 "Antilocapra americana",
+                                                 "Callipepla squamata",
+                                                 "Colinus virginianus",
+                                                 "Meleagris gallopavo",
+                                                 "Odocoileus hemionus"
+                                                    ) ~ "Game Specie",
+                        `Scientific Name` %in% c("Canis latrans",
+                                                 "Falco sparverius",
+                                                 "Holbrookia lacerata",
+                                                 "Lynx rufus") ~ "Non-game Specie",
+                        `Scientific Name` %in% c("Sus scrofa") ~ "Invasive Specie",
+                        TRUE ~ "Threatened Specie"),
+    year = factor(year),
+    cmon_ordered = reorder_within(`Common Name`, n_abstracts, year)
+  )
+  
+
+Species_plot <- ggplot(species_top_year, aes(x = cmon_ordered, y = n_abstracts)) +
+  
+
+  geom_segment(
+    aes(xend = cmon_ordered, yend = 0),
+    color = "#6C6865",
+    linewidth = 0.4
+  ) +
+  
+
+  geom_point(aes(color = sps_type), size = 4, alpha = 0.9) +
+  
+   geom_text(
+    aes(label = n_abstracts),
+    family = "tctws",
+    size = 2,
+    hjust = -0.15,
+    color = "#2B2B2B"
+  ) +
+  
+  scale_color_manual(
+    values = c(
+      "Game Specie" = "#4E79A7",
+      "Non-game Specie" = "#F28E2B",
+      "Invasive Specie" = "#E15759",
+      "Threatened Specie" = "#76B7B2"
+    )
+  ) +
+  
+  scale_y_continuous(expand = expansion(mult = c(0, 0.12)), limits = c(0, 16)) +
+  coord_flip(clip = "off") +
+  facet_wrap(~year, scales = "free_y") +
+  scale_x_reordered() +
+  labs(
+    x = NULL,
+    y = "Number of abstracts mentioning species",
+    color = "Type"
+  ) +
+  theme_bw(base_family = "tctws", base_size = 4) +
+  theme(
+    strip.background = element_rect(fill = "transparent", colour = NA),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    strip.text = element_text(face = "bold"),
+    legend.position = "bottom",
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.key = element_rect(fill = "white", color = NA),
+    legend.text = element_text(size = 3),
+    axis.text.y = element_text(size = 3),
+    plot.margin = margin(10, 25, 10, 10) 
+  )
+
+Species_plot
+```
