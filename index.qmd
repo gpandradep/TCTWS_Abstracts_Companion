@@ -948,7 +948,7 @@ top_sps_wider <- top_sps_types %>%
               values_fill = "0%")
 
 
-datatable(species_year_wide,
+datatable(top_sps_wider,
           rownames = FALSE,
           extensions = "Buttons",
           options = list(
