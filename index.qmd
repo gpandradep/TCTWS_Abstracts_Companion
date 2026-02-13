@@ -820,6 +820,32 @@ datatable(species_year_wide,
 ```
 
 ```{r}
+n_species_year <- species_year_counts %>% 
+  group_by(year) %>% 
+  summarise(n_species= n_distinct(`Scientific Name`))
+
+nspciesplot <- ggplot(n_species_year, aes(x = year, y = n_species)) +
+  geom_segment(aes(y = 0, yend = n_species ), col= tctws_maroon, size= 3) +
+  geom_point( size = 8, color = tctws_maroon) +
+  geom_text( aes(label = n_species),  vjust = -1, family = "tctws",
+    size = 6, color = tctws_text
+  ) +
+  scale_y_continuous( expand = expansion(mult = c(0, 0.12))) +
+  labs( x = "Year", y = "Number of Species mentioned") +
+  theme_minimal(base_family = "tctws", base_size = 15) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = tctws_grid, linewidth = 0.4),
+    axis.title = element_text(face = "bold"),
+    axis.text  = element_text(color = tctws_text),
+    plot.margin = margin(10, 12, 10, 12)
+  )
+
+nspciesplot
+```
+
+```{r}
 #| fig-width: 9.5
 #| fig-height: 6
 #| fig-align: "center"
@@ -848,6 +874,7 @@ species_top_year <- species_year_counts %>%
     cmon_ordered = reorder_within(`Common Name`, n_abstracts, year)
   )
   
+
 
 Species_plot <- ggplot(species_top_year, aes(x = cmon_ordered, y = n_abstracts)) +
   
@@ -902,4 +929,31 @@ Species_plot <- ggplot(species_top_year, aes(x = cmon_ordered, y = n_abstracts))
   )
 
 Species_plot
+```
+
+```{r}
+top_sps_types <-  species_top_year %>% group_by(year, sps_type) %>% 
+  summarise(n= n() ) %>% 
+  ungroup() %>% 
+  group_by(year) %>% 
+  mutate(total= sum(n),
+         perc= (n*100)/total)
+
+
+top_sps_wider <- top_sps_types %>% 
+  select("Species type" = sps_type, perc, year) %>% 
+  mutate(perc= paste(perc, "%")) %>% 
+  pivot_wider(names_from = year,
+              values_from = perc,
+              values_fill = "0%")
+
+
+datatable(species_year_wide,
+          rownames = FALSE,
+          extensions = "Buttons",
+          options = list(
+            pageLength = 20,
+            dom = "Bfrtip",
+            buttons = c("copy", "csv", "excel")
+          ))
 ```
